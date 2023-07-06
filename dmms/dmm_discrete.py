@@ -8,6 +8,10 @@ import pyro.poutine as poutine
 from pyro.distributions import TransformedDistribution
 from pyro.distributions.transforms import affine_autoregressive
 
+def to_categorical(y, num_classes):
+    """ 1-hot encodes a tensor """
+    return np.eye(num_classes, dtype='uint8')[y]
+
 class EmissionNet(nn.Module):
     """
     Parameterizes the observation probability vector `p(x_t | z_t, a_{t-1})` with a softmax activation
@@ -166,6 +170,7 @@ class DMM_discrete(nn.Module):
 
         self.use_cuda = use_cuda
         self.use_action_emitter = use_action_emitter
+        self.z_dim = z_dim
         # if on gpu cuda-ize all PyTorch (sub)modules
         if use_cuda:
             self.cuda()
@@ -213,7 +218,8 @@ class DMM_discrete(nn.Module):
                         "z_%d" % t,
                         dist.Categorical(b_tilde_t)
                     )
-                z_t = z_t[:, None].float()
+                #z_t = z_t[:, None].float()
+                z_t = torch.Tensor(to_categorical(z_t, self.z_dim))
                 # compute the probabilities that parameterize the Categorical distribution
                 # for the observation likelihood
                 if self.use_action_emitter:
@@ -226,7 +232,7 @@ class DMM_discrete(nn.Module):
                     "obs_x_%d" % t,
                     dist.Categorical(emission_probs_t)
                     .to_event(1),
-                    obs=x_batch[:, t], 
+                    obs=x_batch[:, t].squeeze().argmax(-1), 
                 )
                 # the latent sampled at this time step will be conditioned upon
                 # in the next time step by carring the belief variable
