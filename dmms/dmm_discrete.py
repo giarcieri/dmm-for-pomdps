@@ -10,7 +10,7 @@ from pyro.distributions.transforms import affine_autoregressive
 
 def to_categorical(y, num_classes):
     """ 1-hot encodes a tensor """
-    return np.eye(num_classes, dtype='uint8')[y]
+    return torch.eye(num_classes).to(y.device)[y]
 
 class EmissionNet(nn.Module):
     """
@@ -191,6 +191,8 @@ class DMM_discrete(nn.Module):
 
         # initialize the probability distribution over the latent
         b_tilde_0 = self.b_tilde_0.expand(x_batch.size(0), self.b_tilde_0.size(0))
+        if self.use_cuda:
+            b_tilde_0 = b_tilde_0.cuda()
 
         # we enclose all the sample statements in the model in a plate.
         # this marks that each datapoint is conditionally independent of the others
@@ -219,7 +221,7 @@ class DMM_discrete(nn.Module):
                         dist.Categorical(b_tilde_t)
                     )
                 #z_t = z_t[:, None].float()
-                z_t = torch.Tensor(to_categorical(z_t, self.z_dim))
+                z_t = to_categorical(z_t, self.z_dim)
                 # compute the probabilities that parameterize the Categorical distribution
                 # for the observation likelihood
                 if self.use_action_emitter:
@@ -253,6 +255,8 @@ class DMM_discrete(nn.Module):
         # We initialize the belief with b_tilde_0, which can be seen as the prior belief
         # when no observation has been observed yet. 
         b_tilde_0 = self.b_tilde_0.expand(x_batch.size(0), self.b_tilde_0.size(0)) 
+        if self.use_cuda:
+            b_tilde_0 = b_tilde_0.cuda()
 
         # we enclose all the sample statements in the guide in a plate.
         # this marks that each datapoint is conditionally independent of the others.
