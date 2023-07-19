@@ -127,7 +127,7 @@ class DMM():
                 else:
                     # by default the KL annealing factor is unity
                     annealing_factor = 1.0
-                epoch_nll += self.svi.step(x_batch, a_batch, annealing_factor)/(mini_batch_size*max_T)
+                epoch_nll += self.svi.step(x_batch, a_batch, annealing_factor)/(N_train_data*max_T)
             epoch_nll_list.append(epoch_nll)
             if save_model:
                 self.save_checkpoint(path_save_model, path_save_opt)

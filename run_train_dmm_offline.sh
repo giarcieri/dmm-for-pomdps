@@ -12,18 +12,18 @@ source /cluster/apps/local/env2lmod.sh
 module load gcc/8.2.0 cuda/11.3.1 cudnn/8.2.1.32
 
 python train_dmm_offline.py \
---n_batch 500 \
+--n_batch 5000 \
 --eps 0.2 \
 --length 100 \
---annealing_epochs 1500 \
+--annealing_epochs 10000 \
 --learning-rate 0.001 \
---learning-rate-decay 1.0 \
+--learning-rate-decay 0.99996 \
 --beta1 0.95 \
 --beta2 0.999 \
 --emitter_hidden_dim 100 \
 --transition_hidden_dim 100 \
 --inference_hidden_dim 100 \
---num_epochs 1500 \
---mini_batch_size 20 \
+--num_epochs 10000 \
+--mini_batch_size 250 \
 --minimum_annealing_factor 0.0  \
 --use-cuda 1

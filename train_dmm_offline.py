@@ -103,15 +103,24 @@ dmm = DMM(
 epoch_nll_list = dmm.train(x_seq=obs_seq, a_seq=action_seq, num_epochs=num_epochs, mini_batch_size=mini_batch_size,)
 train_time = time.time()-start_time
 print(f"Training time: {round(train_time/3600, 1)}h")
-print('Best NLL:', np.max(epoch_nll_list))
+print('Best NLL:', np.min(epoch_nll_list))
 plt.plot(epoch_nll_list)
 plt.savefig('images/nll');
-state = torch.tensor(to_categorical([0], 5))
+states = torch.tensor([[0], [1], [2], [3], [4]])
+states = to_categorical(states, 5)
+true_matrix = np.array([
+    [0.80, 0.20, 0.00],
+    [0.20, 0.60, 0.20],
+    [0.05, 0.70, 0.25],
+    [0.00, 0.30, 0.70],
+    [0.00, 0.00, 1.00]
+])
 if use_cuda:
-    state = state.cuda()
-print('Ground truth observation prob for hidden state 0 [0.80, 0.20, 0.00],\nLearned:', dmm.dmm.emitter(state))
-b_t_1 = torch.tensor([[1., 0., 0., 0., 0.]])
-a_t_1 = torch.tensor(to_categorical([0], 4))
+    states = states.cuda()
+print(f'Ground truth observation matrix: \n{true_matrix},\nLearned:', dmm.dmm.emitter(states))
+b_t_1 = states
+a_t_1 = torch.tensor([[0], [0], [0], [0], [0]])
+a_t_1 = to_categorical(a_t_1, 4)
 if use_cuda:
     b_t_1, a_t_1 = b_t_1.cuda(), a_t_1.cuda()
-print('Learned propagated belief from initialization:', dmm.dmm.trans(b_t_1, a_t_1))
+print('Learned propagated beliefs for action 0:', dmm.dmm.trans(b_t_1, a_t_1))
