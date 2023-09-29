@@ -8,16 +8,12 @@ import pyro.poutine as poutine
 from pyro.distributions import TransformedDistribution
 from pyro.distributions.transforms import affine_autoregressive
 
-def to_categorical(y, num_classes):
-    """ 1-hot encodes a tensor """
-    return torch.eye(num_classes).to(y.device)[y]
-
 class EmissionNet(nn.Module):
     """
-    Parameterizes the observation probability vector `p(x_t | z_t, a_{t-1})` with a softmax activation
+    Parameterizes the observation probability vector `p(x_t | z_t, a_{t-1})` 
     """
 
-    def __init__(self, z_dim, hidden_dim, x_prob_dim, a_dim=None): 
+    def __init__(self, z_dim, hidden_dim, x_dim, a_dim=None): 
         super().__init__()
         # in some problems, the action may impact the observation generation and should thus be passed as input
         if a_dim:
@@ -26,11 +22,11 @@ class EmissionNet(nn.Module):
             inp_dim = z_dim
         # initialize the three linear transformations used in the neural network
         self.lin_input_to_hidden = nn.Linear(inp_dim, hidden_dim)
-        self.lin_hidden_to_hidden = nn.Linear(hidden_dim, hidden_dim)
-        self.lin_hidden_to_emission = nn.Linear(hidden_dim, x_prob_dim)
-        # initialize the two non-linearities used in the neural network
+        self.lin_hidden_to_mean = nn.Linear(hidden_dim, x_dim)
+        self.lin_hidden_to_scale = nn.Linear(hidden_dim, x_dim)
+        # initialize non-linearities used in the neural network
         self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=-1)
+        self.softplus = nn.Softplus()
 
     def forward(self, z_t, a_t_1=None):
         """
@@ -42,54 +38,40 @@ class EmissionNet(nn.Module):
             inp = torch.cat([z_t, a_t_1], -1) 
         else:
             inp = z_t
-        h1 = self.relu(self.lin_input_to_hidden(inp))
-        h2 = self.relu(self.lin_hidden_to_hidden(h1))
-        ps = self.softmax(self.lin_hidden_to_emission(h2))
-        return ps
+        hidden = self.relu(self.lin_input_to_hidden(inp))
+        loc = self.lin_hidden_to_mean(hidden)
+        scale = self.softplus(self.lin_hidden_to_scale(hidden)) + 1e-5
+        return loc, scale
     
 class TransitionNet(nn.Module):
     """
     Parameterizes the transition probability vector `\tilde{b}_t = p(z_t | b_{t-1}, a_{t-1})` 
-    with a softmax activation
     """
 
     def __init__(self, b_dim, a_dim, transition_hidden_dim):
         super().__init__()
         # input dimension
         input_dim = b_dim + a_dim 
-        # initialize the six linear transformations used in the neural network
-        self.gate_input_to_hidden = nn.Linear(input_dim, transition_hidden_dim)
-        self.gate_hidden_to_gate = nn.Linear(transition_hidden_dim, b_dim)
-        self.non_lin_part_input_to_hidden = nn.Linear(input_dim, transition_hidden_dim)
-        self.non_lin_part_hidden_to_z_next = nn.Linear(transition_hidden_dim, b_dim)
-        self.lin_part_input_to_z_next = nn.Linear(input_dim, b_dim)
-        # modify the default initialization of lin_part_input_to_z_next
-        # so that it's starts out as the identity function
-        self.lin_part_input_to_z_next.weight.data = torch.eye(b_dim, input_dim)
-        self.lin_part_input_to_z_next.bias.data = torch.zeros(b_dim)
-        # activation function for the logits
-        self.softmax = nn.Softmax(dim=-1)
+        # initialize the three linear transformations used in the neural network
+        self.lin_input_to_hidden = nn.Linear(input_dim, transition_hidden_dim)
+        self.lin_hidden_to_b_next_mean = nn.Linear(transition_hidden_dim, b_dim)
+        self.lin_hidden_to_b_next_scale = nn.Linear(transition_hidden_dim, b_dim)
+        # initialize the two non-linearities used in the neural network
         self.relu = nn.ReLU()
+        self.softplus = nn.Softplus()
 
-    def forward(self, b_t_1, a_t_1):
+    def forward(self, b_t_1, a_t_1): 
         """
         Given the probability `b_{t-1}` over the latent `z_{t-1}` and the action `a_{t-1}`
-        we return the probability vector `\tilde{b}_{t-1}` that parameterizes the
-        Categorical distribution `\tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})`
+        we return the loc and scale  that parameterizes the Normal distribution 
+        `\tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})`
         """
         # compute the gating function
         input = torch.cat([b_t_1, a_t_1], -1) 
-        _gate = self.relu(self.gate_input_to_hidden(input))
-        gate = torch.sigmoid(self.gate_hidden_to_gate(_gate))
-        # compute the non linear part of the gating function
-        _non_lin_logits = self.relu(self.non_lin_part_input_to_hidden(input))
-        non_lin_logits = self.non_lin_part_hidden_to_z_next(_non_lin_logits)
-        # assemble the probability distribution used to sample z_t, which mixes a linear transformation
-        # of the input with the non linear transformation modulated by the gating function
-        logits = (1 - gate) * self.lin_part_input_to_z_next(input) + gate * non_lin_logits
-        # return the state transition probability vector 
-        # which approximates the probability distribution over the next state
-        return self.softmax(logits)
+        hidden = self.relu(self.lin_input_to_hidden(input))
+        loc = self.lin_hidden_to_b_next_mean(hidden)
+        scale = self.softplus(self.lin_hidden_to_b_next_scale(hidden)) + 1e-5
+        return loc, scale
     
 class InferenceNet(nn.Module):
     """
@@ -105,12 +87,13 @@ class InferenceNet(nn.Module):
         input_q_dim = b_dim + x_dim
         # initialize the three linear transformations used in the neural network
         self.lin_input_to_hidden = nn.Linear(input_q_dim, hidden_dim)
-        self.lin_hidden_to_b_next = nn.Linear(hidden_dim, b_dim)
+        self.lin_hidden_to_b_next_mean = nn.Linear(hidden_dim, b_dim)
+        self.lin_hidden_to_b_next_scale = nn.Linear(hidden_dim, b_dim)
         # initialize the two non-linearities used in the neural network
         self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=-1)
+        self.softplus = nn.Softplus()
 
-    def forward(self, b_tilde_t, x_t):
+    def forward(self, b_tilde_t, x_t): 
         """
         Given the belief `b_{t-1}` and the action `a_{t-1}` at at a particular time step t-1, 
         we first propagate the belief to the next time step by predicting the probability distribution
@@ -122,51 +105,50 @@ class InferenceNet(nn.Module):
         Here it is assumed that `\tilde{b}_t` has already been computed and passed as input.
         """
         input_q = torch.cat([b_tilde_t, x_t], -1) 
-        _b_t = self.relu(self.lin_input_to_hidden(input_q))
-        b_t = self.softmax(self.lin_hidden_to_b_next(_b_t))
-        return b_t
+        hidden = self.relu(self.lin_input_to_hidden(input_q))
+        b_t_loc = self.lin_hidden_to_b_next_mean(hidden)
+        b_t_scale = self.softplus(self.lin_hidden_to_b_next_scale(hidden)) + 1e-5
+        return b_t_loc, b_t_scale
     
-class DMM_discrete(nn.Module):
+class DMM_continuous(nn.Module): 
     """
     This PyTorch Module encapsulates the model as well as the
     variational distribution (the guide) for the Deep Markov Model
-    based on discrete states and actions.
+    based on continuous variables.
     """
 
     def __init__(
         self,
         z_dim=1,
         x_dim=1,
-        x_prob_dim=5,
-        b_dim=4,
+        b_dim=1,
         a_dim=1,
         use_action_emitter=False,
         emitter_hidden_dim=100,
         transition_hidden_dim=100,
         inference_hidden_dim=100,
-        #num_iafs=0,
-        #iaf_dim=50,
+        num_iafs=0,
+        iaf_dim=50,
         use_cuda=False,
     ):
         super().__init__()
         # instantiate PyTorch modules used in the model and guide below
         if use_action_emitter:
-            self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_prob_dim, a_dim)
+            self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_dim, a_dim)
         else:
-            self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_prob_dim)
+            self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_dim)
         self.trans = TransitionNet(b_dim, a_dim, transition_hidden_dim)
         self.inference = InferenceNet(b_dim, x_dim, inference_hidden_dim)
 
-        ### not needed for discrete
         # if we're using normalizing flows, instantiate those too
-        #self.iafs = [
-        #    affine_autoregressive(z_dim, hidden_dims=[iaf_dim]) for _ in range(num_iafs)
-        #]
-        #self.iafs_modules = nn.ModuleList(self.iafs)
-        ###
+        self.iafs = [
+            affine_autoregressive(z_dim, hidden_dims=[iaf_dim]) for _ in range(num_iafs)
+        ]
+        self.iafs_modules = nn.ModuleList(self.iafs)
 
-        # The initial belief is always [1., 0., 0., ...]
-        self.b_tilde_0 = torch.eye(1, b_dim).squeeze()
+        # The initial belief is always 1
+        self.b_tilde_0 = torch.ones(z_dim) # mean
+        #self.b_tilde_0_std = torch.zeros(z_dim).squeeze() + 1e-5
 
         self.use_cuda = use_cuda
         self.use_action_emitter = use_action_emitter
@@ -179,7 +161,7 @@ class DMM_discrete(nn.Module):
     def generative_model(
             self,
             x_batch, # shape (Batches x Timesteps x Dimensions)
-            a_batch, # shape (Batches x Timesteps x Dimensions) #TODO: maybe pass action as OneHotEncoded?
+            a_batch, # shape (Batches x Timesteps x Dimensions)
             annealing_factor=1.0,
     ):        
         # this is the number of time steps we need to process in the mini-batch
@@ -191,6 +173,7 @@ class DMM_discrete(nn.Module):
 
         # initialize the probability distribution over the latent
         b_tilde_0 = self.b_tilde_0.expand(x_batch.size(0), self.b_tilde_0.size(0))
+        # initialize std as well if used
         if self.use_cuda:
             b_tilde_0 = b_tilde_0.cuda()
 
@@ -205,42 +188,39 @@ class DMM_discrete(nn.Module):
             for t in pyro.markov(range(T_max)):
                 # the next chunk of code samples \tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})
 
-                # for the first time step t=0, we do not have actions and sample directly from
-                # the initialized distribution, 
-                # else we compute the propagated belief  \tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})
                 if t == 0:
-                    b_tilde_t = b_tilde_0
+                    z_loc, z_scale = b_tilde_0, 1e-5
                 else:
-                    b_tilde_t = self.trans(b_tilde_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]?? # if this doesn't work, maybe passing z_prev as input?
+                    z_loc, z_scale = self.trans(b_tilde_prev, a_batch[:, t-1]) 
+
                 # track variables
-                #b_tilde_t = pyro.param("b_tilde_%d" % t, b_tilde_t)
+                #b_tilde_t = pyro.deterministic("b_tilde_%d" % t, z_loc)
 
-
-                # then sample z_t according to dist.Categorical(b_tilde_t)
+                # then sample z_t according to Normal(z_loc, z_scale)
                 with poutine.scale(scale=annealing_factor):
                     z_t = pyro.sample(
                         "z_%d" % t,
-                        dist.Categorical(b_tilde_t).to_event(1)
+                        dist.Normal(z_loc, z_scale)
+                        .to_event(1)
                     )
-                #z_t = z_t[:, None].float()
-                z_t = to_categorical(z_t, self.z_dim)
-                # compute the probabilities that parameterize the Categorical distribution
-                # for the observation likelihood
+
+                # compute the emissions
                 if self.use_action_emitter:
-                    emission_probs_t = self.emitter(z_t, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??
+                    x_loc, x_scale = self.emitter(z_t, a_batch[:, t-1])
                 else:
-                    emission_probs_t = self.emitter(z_t)
+                    x_loc, x_scale = self.emitter(z_t)
                 # the next statement instructs pyro to observe x_t according to the
-                # Categorical distribution p(x_t|z_t)
+                # Normal distribution p(x_t|z_t)
                 pyro.sample(
                     "obs_x_%d" % t,
-                    dist.Categorical(emission_probs_t)
+                    dist.Normal(x_loc, x_scale)
                     .to_event(1),
-                    obs=x_batch[:, t].squeeze().argmax(-1), 
+                    obs=x_batch[:, t], 
                 )
+
                 # the latent sampled at this time step will be conditioned upon
                 # in the next time step by carring the belief variable
-                b_tilde_prev = b_tilde_t
+                b_tilde_prev = z_t #TODO: maybe better to carry z_loc and z_scale
 
     # the guide q(z_{0:T} | x_{0:T},  a_{0:T-1}) (i.e. the variational distribution)
     def inference_model(
@@ -272,61 +252,52 @@ class DMM_discrete(nn.Module):
                 # We take into account the possibility that the observations could not be acquired 
                 # at every timestep, in which case the propagated belief `\tilde{b}_t` is returned.
                 if t == 0:
-                    # No action at the first t, b_tilde_0 coincides with the belief b_0
-                    b_t = self.inference(b_tilde_0, x_batch[:, t])
+                    z_loc, z_scale = self.inference(b_tilde_0, x_batch[:, t])
                 elif x_batch[:, t] is not None: #TODO: this is wrong, it is always True, fix it for non-permanent monitoring
                     # we have acquired an observation, so we first propgate the belief and
                     # then use the observation to reduce the uncertainty and infer b_t, namely
                     # the distribution q(z_t | b_{t-1}, x_{t}, a_{t-1})
-                    b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??# if sharing parameters doesn't work,
-                    b_t = self.inference(b_tilde_t, x_batch[:, t]) # maybe using one inference nn only like in the original DMM?
+                    z_loc_tilde_t, _ = self.trans(b_prev, a_batch[:, t-1]) # if sharing parameters doesn't work,
+                    z_loc, z_scale = self.inference(z_loc_tilde_t, x_batch[:, t]) # maybe using one inference nn only like in the original DMM?
                 else:
                     # We did not acquire a new observation  
                     # so our new belief is just the propagated b_tilde
-                    b_t = b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??
+                    z_loc, z_scale = self.trans(b_prev, a_batch[:, t])
                 # track variables
-                #b_t = pyro.param("b_%d" % t, b_t)
+                #b_t = pyro.deterministic("b_%d" % t, b_t)
 
 
-                ########## No normalizing flows here
                 # if we are using normalizing flows, we apply the sequence of transformations
                 # parameterized by self.iafs to the base distribution defined in the previous line
                 # to yield a transformed distribution that we use for q(z_t|...)
-                #if len(self.iafs) > 0:
-                #    z_dist = TransformedDistribution(
-                #        dist.Normal(z_loc, z_scale), self.iafs
-                #    )
-                #    assert z_dist.event_shape == (self.z_q_0.size(0),)
-                #    assert z_dist.batch_shape[-1:] == (len(mini_batch),)
-                #else:
-                #    z_dist = dist.Normal(z_loc, z_scale)
-                #    assert z_dist.event_shape == ()
-                #    assert z_dist.batch_shape[-2:] == (
-                #        len(mini_batch),
-                #        self.z_q_0.size(0),
-                #    )
-                ##########
-                z_dist = dist.Categorical(b_t)
+                if len(self.iafs) > 0:
+                    z_dist = TransformedDistribution(
+                        dist.Normal(z_loc, z_scale), self.iafs
+                    )
+                    assert z_dist.event_shape == (self.b_tilde_0.size(0),)
+                    assert z_dist.batch_shape[-1:] == (len(x_batch),)
+                else:
+                    z_dist = dist.Normal(z_loc, z_scale)
+                    assert z_dist.event_shape == ()
+                    assert z_dist.batch_shape[-2:] == (
+                        len(x_batch),
+                        self.b_tilde_0.size(0),
+                    )
 
                 # sample z_t from the distribution z_dist
                 with pyro.poutine.scale(scale=annealing_factor):
-                    ########## No normalizing flows here
-                    #if len(self.iafs) > 0:
-                    #    # in output of normalizing flow, all dimensions are correlated (event shape is not empty)
-                    #    z_t = pyro.sample(
-                    #        "z_%d" % t, z_dist.mask(mini_batch_mask[:, t - 1])
-                    #    )
-                    #else:
-                    #    # when no normalizing flow used, ".to_event(1)" indicates latent dimensions are independent
-                    #    z_t = pyro.sample(
-                    #        "z_%d" % t,
-                    #        z_dist.mask(mini_batch_mask[:, t - 1 : t]).to_event(1),
-                    #    )
-                    ##########
-                    z_t = pyro.sample(
-                            "z_%d" % t,
-                            z_dist.to_event(1)
+                    if len(self.iafs) > 0:
+                        # in output of normalizing flow, all dimensions are correlated (event shape is not empty)
+                        z_t = pyro.sample(
+                            "z_%d" % t, z_dist
                         )
+                    else:
+                        # when no normalizing flow used, ".to_event(1)" indicates latent dimensions are independent
+                        z_t = pyro.sample(
+                            "z_%d" % t,
+                            z_dist.to_event(1),
+                        )
+
                 # the latent sampled at this time step will be conditioned upon in the next time step
                 # by carring the belief variable
-                b_prev = b_t
+                b_prev = z_t #TODO: should this be changed to z_loc? # maybe better to carry z_loc and z_scale

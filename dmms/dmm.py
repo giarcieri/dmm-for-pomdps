@@ -1,4 +1,5 @@
 from .dmm_discrete import *
+from .dmm_continuous import *
 from pyro.infer import (
     SVI,
     JitTrace_ELBO,
@@ -6,6 +7,7 @@ from pyro.infer import (
     TraceEnum_ELBO,
     TraceTMC_ELBO,
     config_enumerate,
+    TraceMeanField_ELBO
 )
 from pyro.optim import ClippedAdam
 import logging 
@@ -29,25 +31,30 @@ class DMM():
         emitter_hidden_dim=100,
         transition_hidden_dim=100,
         inference_hidden_dim=100,
-        #num_iafs=0, #needed for continuous
-        #iaf_dim=50, #needed for continuous
+        num_iafs=0, 
+        iaf_dim=50, 
         use_cuda=False,
         adam_params={'lr': 1e-3, 'lrd': 1., 'betas' : (0.9, 0.999)},
         num_particles=1,
         filename=None,
         annealing_epochs=0,
         minimum_annealing_factor=0.2,
-        keep_logs=False
+        keep_logs=False,
+        elbo='trace'
     ):
         # initialize the dmm with dicrete or with continuous variables
         if mode == 'discrete':
             self.dmm = DMM_discrete(z_dim, x_dim, x_prob_dim, b_dim, a_dim, use_action_emitter, emitter_hidden_dim, 
                                     transition_hidden_dim, inference_hidden_dim, use_cuda)
         elif mode == 'continuous':
-            raise NotImplementedError
+            self.dmm = DMM_continuous(z_dim, x_dim, b_dim, a_dim, use_action_emitter, emitter_hidden_dim, 
+                                      transition_hidden_dim, inference_hidden_dim, num_iafs, iaf_dim, use_cuda)
         
         self.adam = ClippedAdam(adam_params)
-        elbo = Trace_ELBO(num_particles=num_particles)
+        if elbo == 'trace':
+            elbo = Trace_ELBO(num_particles=num_particles)
+        elif elbo == 'gaussian':
+            elbo = TraceMeanField_ELBO(num_particles=num_particles)
         self.svi = SVI(self.dmm.generative_model, self.dmm.inference_model, self.adam, loss=elbo)
 
         self.annealing_epochs = annealing_epochs
@@ -127,8 +134,8 @@ class DMM():
                 else:
                     # by default the KL annealing factor is unity
                     annealing_factor = 1.0
-                epoch_nll += self.svi.step(x_batch, a_batch, annealing_factor)/(N_train_data*max_T)
-            epoch_nll_list.append(epoch_nll)
+                epoch_nll += self.svi.step(x_batch, a_batch, annealing_factor)
+            epoch_nll_list.append(epoch_nll/(N_train_data*max_T))
             if save_model:
                 self.save_checkpoint(path_save_model, path_save_opt)
         return epoch_nll_list

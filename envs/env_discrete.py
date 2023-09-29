@@ -158,13 +158,13 @@ class DiscreteEnv(gym.Env):
         self.belief = np.array([1., 0., 0., 0., 0.])
         self.t = 0
         if self.monitoring == 'permanent':
-            self.obs = 0
+            self.obs = self.observation_generating_process(None, self.state)
         elif self.monitoring == 'non-permanent':
             # Since the belief would be initialized with certainty on 0 in the POMDP context,
             # but here the DMM has to predict the belief, so it will never be exactly that,
             # we assume that the previous inspections action was 2, 
             # hopefully to get a belief closer to the correct initialization.
-            self.obs = np.array([2, 0])
+            self.obs = np.array([2, 0]) #TODO: check if correct
 
         if self.return_belief:
             return self.belief
