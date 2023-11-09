@@ -124,3 +124,9 @@ a_t_1 = to_categorical(a_t_1, 4)
 if use_cuda:
     b_t_1, a_t_1 = b_t_1.cuda(), a_t_1.cuda()
 print('Learned propagated beliefs for action 0:', torch.round(dmm.dmm.trans(b_t_1, a_t_1), decimals=2))
+
+predictive = pyro.infer.Predictive(dmm.dmm.generative_model, guide=dmm.dmm.inference_model, num_samples=500)
+svi_samples = predictive(x_batch=obs_seq[:1], a_batch=action_seq[:1], annealing_factor=1.0,)
+for i in range(50):
+    z_t = f'z_{i}'
+    print(f'pred z_{i} {svi_samples[z_t].float().mean(0)}\ntrue z_{i} {np.array(state_seq)[0, i]}\nobs_{i} {obs_seq[0, i]}\na_{i} {action_seq[0, i]}\n')

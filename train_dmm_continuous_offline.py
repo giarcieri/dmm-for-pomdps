@@ -118,3 +118,9 @@ with torch.no_grad():
     print(f"Next state means for action {a_t_1}", true_means, dmm.dmm.trans(states, a_t_1)[0])
     print(f"Next state std for action {a_t_1}", true_std, dmm.dmm.trans(states, a_t_1)[1])
     print(f"Next state inferred for obs 0.5", states, dmm.dmm.inference(states, obs))
+
+predictive = pyro.infer.Predictive(dmm.dmm.generative_model, guide=dmm.dmm.inference_model, num_samples=500)
+svi_samples = predictive(x_batch=obs_seq[:1], a_batch=action_seq[:1], annealing_factor=1.0,)
+for i in range(50):
+    z_t = f'z_{i}'
+    print(f'pred z_{i} {svi_samples[z_t].mean(0)}\ntrue z_{i} {np.array(state_seq)[0, i]}\nobs_{i} {obs_seq[0, i]}\na_{i} {action_seq[0, i]}\n')

@@ -28,7 +28,7 @@ class DiscreteEnv(gym.Env):
     """
     POMDP benchmarking environment with 5 states, 4 maintenance actions and 3 inspection actions 
     for a total of 12 actions, and 3 or 5 observations depending on the inspection chosen.
-    Deatils in Papakonstantinou et al. (2018) and Corotis et al. (2015).
+    Deatils in Papakonstantinou et al. (2018) and Corotis et al. (2005).
 
     A simpler version with continuous permanent monitoring is also implemented, 
     where a visual inpection is performed at every timestep.

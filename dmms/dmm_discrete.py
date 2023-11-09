@@ -71,7 +71,7 @@ class TransitionNet(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.relu = nn.ReLU()
 
-    def forward(self, b_t_1, a_t_1):
+    def forward(self, b_t_1, a_t_1): #TODO: try not to use the gate function but as in dmm_continuous
         """
         Given the probability `b_{t-1}` over the latent `z_{t-1}` and the action `a_{t-1}`
         we return the probability vector `\tilde{b}_{t-1}` that parameterizes the
@@ -144,8 +144,6 @@ class DMM_discrete(nn.Module):
         emitter_hidden_dim=100,
         transition_hidden_dim=100,
         inference_hidden_dim=100,
-        #num_iafs=0,
-        #iaf_dim=50,
         use_cuda=False,
     ):
         super().__init__()
@@ -156,14 +154,6 @@ class DMM_discrete(nn.Module):
             self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_prob_dim)
         self.trans = TransitionNet(b_dim, a_dim, transition_hidden_dim)
         self.inference = InferenceNet(b_dim, x_dim, inference_hidden_dim)
-
-        ### not needed for discrete
-        # if we're using normalizing flows, instantiate those too
-        #self.iafs = [
-        #    affine_autoregressive(z_dim, hidden_dims=[iaf_dim]) for _ in range(num_iafs)
-        #]
-        #self.iafs_modules = nn.ModuleList(self.iafs)
-        ###
 
         # The initial belief is always [1., 0., 0., ...]
         self.b_tilde_0 = torch.eye(1, b_dim).squeeze()
@@ -179,7 +169,7 @@ class DMM_discrete(nn.Module):
     def generative_model(
             self,
             x_batch, # shape (Batches x Timesteps x Dimensions)
-            a_batch, # shape (Batches x Timesteps x Dimensions) #TODO: maybe pass action as OneHotEncoded?
+            a_batch, # shape (Batches x Timesteps x Dimensions) 
             annealing_factor=1.0,
     ):        
         # this is the number of time steps we need to process in the mini-batch
@@ -211,7 +201,7 @@ class DMM_discrete(nn.Module):
                 if t == 0:
                     b_tilde_t = b_tilde_0
                 else:
-                    b_tilde_t = self.trans(b_tilde_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]?? # if this doesn't work, maybe passing z_prev as input?
+                    b_tilde_t = self.trans(b_tilde_prev, a_batch[:, t-1]) #TODO: if this doesn't work, maybe passing z_prev as input?
                 # track variables
                 #b_tilde_t = pyro.param("b_tilde_%d" % t, b_tilde_t)
 
@@ -227,7 +217,7 @@ class DMM_discrete(nn.Module):
                 # compute the probabilities that parameterize the Categorical distribution
                 # for the observation likelihood
                 if self.use_action_emitter:
-                    emission_probs_t = self.emitter(z_t, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??
+                    emission_probs_t = self.emitter(z_t, a_batch[:, t-1]) 
                 else:
                     emission_probs_t = self.emitter(z_t)
                 # the next statement instructs pyro to observe x_t according to the
@@ -278,51 +268,19 @@ class DMM_discrete(nn.Module):
                     # we have acquired an observation, so we first propgate the belief and
                     # then use the observation to reduce the uncertainty and infer b_t, namely
                     # the distribution q(z_t | b_{t-1}, x_{t}, a_{t-1})
-                    b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??# if sharing parameters doesn't work,
+                    b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: if sharing parameters doesn't work,
                     b_t = self.inference(b_tilde_t, x_batch[:, t]) # maybe using one inference nn only like in the original DMM?
                 else:
                     # We did not acquire a new observation  
                     # so our new belief is just the propagated b_tilde
-                    b_t = b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: it should be a_batch[:, t-1]??
+                    b_t = b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) 
                 # track variables
                 #b_t = pyro.param("b_%d" % t, b_t)
 
-
-                ########## No normalizing flows here
-                # if we are using normalizing flows, we apply the sequence of transformations
-                # parameterized by self.iafs to the base distribution defined in the previous line
-                # to yield a transformed distribution that we use for q(z_t|...)
-                #if len(self.iafs) > 0:
-                #    z_dist = TransformedDistribution(
-                #        dist.Normal(z_loc, z_scale), self.iafs
-                #    )
-                #    assert z_dist.event_shape == (self.z_q_0.size(0),)
-                #    assert z_dist.batch_shape[-1:] == (len(mini_batch),)
-                #else:
-                #    z_dist = dist.Normal(z_loc, z_scale)
-                #    assert z_dist.event_shape == ()
-                #    assert z_dist.batch_shape[-2:] == (
-                #        len(mini_batch),
-                #        self.z_q_0.size(0),
-                #    )
-                ##########
                 z_dist = dist.Categorical(b_t)
 
                 # sample z_t from the distribution z_dist
                 with pyro.poutine.scale(scale=annealing_factor):
-                    ########## No normalizing flows here
-                    #if len(self.iafs) > 0:
-                    #    # in output of normalizing flow, all dimensions are correlated (event shape is not empty)
-                    #    z_t = pyro.sample(
-                    #        "z_%d" % t, z_dist.mask(mini_batch_mask[:, t - 1])
-                    #    )
-                    #else:
-                    #    # when no normalizing flow used, ".to_event(1)" indicates latent dimensions are independent
-                    #    z_t = pyro.sample(
-                    #        "z_%d" % t,
-                    #        z_dist.mask(mini_batch_mask[:, t - 1 : t]).to_event(1),
-                    #    )
-                    ##########
                     z_t = pyro.sample(
                             "z_%d" % t,
                             z_dist.to_event(1)
