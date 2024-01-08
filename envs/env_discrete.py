@@ -38,10 +38,12 @@ class DiscreteEnv(gym.Env):
             monitoring='non-permanent', # 'permanent' or 'non-permanent'
             return_belief=False,
             reward_belief=False,
+            seed=42,
     ):
         self.monitoring = monitoring
         self.return_belief = return_belief
         self.reward_belief = reward_belief
+        self.random_generator = np.random.default_rng(seed)
 
         self.maintenance_actions = {
             0: 'Do-nothing',
@@ -71,6 +73,7 @@ class DiscreteEnv(gym.Env):
         if return_belief:
             self.observation_space = Box(low=np.zeros(5), high=np.ones(5), shape=(5,), dtype=np.float32)
         elif monitoring == 'permanent':
+            self.n_obs = 3
             self.observation_space = Discrete(3)
         elif monitoring == 'non-permanent':
             # since the observation space should be fixed in the RL context
@@ -202,24 +205,24 @@ class DiscreteEnv(gym.Env):
         elif self.monitoring == 'non-permanent':
             maintenance_action, _ = action
             transition_probs = self.transition_matrices[maintenance_action, state]
-        next_state = np.random.choice(len(transition_probs), p=transition_probs)
+        next_state = self.random_generator.choice(len(transition_probs), p=transition_probs)
         return next_state
 
     def observation_generating_process(self, action, state):
         if self.monitoring == 'permanent':
             obs_probs = self.O2[state]
-            obs = np.random.choice(len(obs_probs), p=obs_probs)
+            obs = self.random_generator.choice(len(obs_probs), p=obs_probs)
         elif self.monitoring == 'non-permanent':
             _, inspection_action = action
             if inspection_action == 0:
                 obs = np.array([inspection_action, None])
             elif inspection_action == 1:
                 obs_probs = self.O2[state]
-                _obs = np.random.choice(len(obs_probs), p=obs_probs)
+                _obs = self.random_generator.choice(len(obs_probs), p=obs_probs)
                 obs = np.array([inspection_action, _obs])
             elif inspection_action == 2:
                 obs_probs = self.O3[state]
-                _obs = np.random.choice(len(obs_probs), p=obs_probs)
+                _obs = self.random_generator.choice(len(obs_probs), p=obs_probs)
                 obs = np.array([inspection_action, _obs])
         return obs
     
@@ -248,6 +251,117 @@ class DiscreteEnv(gym.Env):
             total_prob += new_belief[next_state]
         new_belief /= total_prob
         return new_belief
+    
+    def update_belief_parallelized(self, belief, obs, action):
+        # Belief state computation
+        new_belief_prior = self.transition_matrices[action].T @ belief
+
+        obs_probs = self.O2[:, obs] # likelihood of observation
+
+        # Bayes' rule
+        new_belief = obs_probs * new_belief_prior # likelihood * prior
+        new_belief /= np.sum(new_belief) # normalize
+        return new_belief
+    
+class SimpleDiscreteEnv(gym.Env):
+    """Simple Env with 4 discrete states, 4 discrete obs, and 3 actions"""
+    def __init__(self, seed=42, return_belief=False, reward_belief=False,):
+        self.random_generator = np.random.default_rng(seed)
+        self.n_states = 4
+        self.n_obs = 4
+        self.n_actions = 3
+        self.initial_observation = 0
+        self.return_belief = return_belief
+        self.reward_belief = reward_belief
+        self.state_space = Discrete(self.n_states)
+        if return_belief:
+            self.observation_space = Box(low=np.zeros(self.n_states), 
+                                         high=np.ones(self.n_states), 
+                                         shape=(self.n_states,), 
+                                         dtype=np.float32)
+        else:
+            self.observation_space = Discrete(self.n_obs)
+        self.action_space = Discrete(self.n_actions)
+        self.transition_tables = np.array([
+             [# Action 0: do-nothing
+                [0.9, 0.1, 0.0, 0.0],
+                [0.0, 0.9, 0.1, 0.0],
+                [0.0, 0.0, 0.9, 0.1],
+                [0.0, 0.0, 0.0, 1.0]
+            ],
+            [# Action 1: minor repair
+                [1.0, 0.0, 0.0, 0.0],
+                [0.9, 0.1, 0.0, 0.0],
+                [0.8, 0.2, 0.0, 0.0],
+                [0.7, 0.2, 0.1, 0.0]
+            ],
+            [# Action 2: major repair (replacement)
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0]
+            ]
+        ])
+
+        self.observation_tables = np.array([
+                [0.8, 0.2, 0.0, 0.0],
+                [0.1, 0.8, 0.1, 0.0],
+                [0.0, 0.1, 0.9, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+        ])
+        
+        # Costs (negative rewards)
+        self.state_action_reward = np.array([
+            [0, -20, -150],
+            [0, -25, -150],
+            [0, -30, -150],
+            [0, -40, -150],
+        ])
+
+        self.reset()
+
+    def reset(self):
+        self.t = 0
+        self.state = 0
+        self.observation = self.initial_observation
+        self.belief = np.array([1, 0, 0, 0])
+        if self.return_belief:
+            return self.belief
+        else:
+            return self.observation
+
+    def step(self, action):
+        # actions: [do_nothing, minor repair, replacement] = [0, 1, 2]
+
+        self.t += 1
+        
+        if self.observation == 3:
+            action = 2 # force replacement
+        
+        next_deterioration_state = self.random_generator.choice(
+            np.arange(self.n_states), p=self.transition_tables[action][self.state]
+        )
+
+        reward = self.state_action_reward[self.state][action]
+        self.state = next_deterioration_state
+
+        self.observation = self.random_generator.choice(
+            np.arange(self.n_states), p=self.observation_tables[self.state]
+        )
+
+        # Belief state computation
+        self.belief = self.transition_tables[action].T @ self.belief
+
+        state_probs = self.observation_tables[:, self.observation] # likelihood of observation
+
+        # Bayes' rule
+        self.belief = state_probs * self.belief # likelihood * prior
+        self.belief /= np.sum(self.belief) # normalize
+
+        if self.return_belief:
+            return self.belief, reward, False, {'obs': self.observation, 'state': self.state, 'timestep': self.t}
+        else:
+            return self.observation, reward, False, {'belief': self.belief, 'state': self.state, 'timestep': self.t}
 
     
 
