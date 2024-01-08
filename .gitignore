@@ -1,2 +1,6 @@
 *.ipynb
 *.png
+__pycache__/
+.ipynb_checkpoints
+envs/__pycache__/
+dmms/__pycache__/
