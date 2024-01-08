@@ -9,8 +9,8 @@ parser = argparse.ArgumentParser(description='dmm')
 parser.add_argument('-n', '--n_batch', type=int, default=500)
 parser.add_argument('-l', '--length', type=int, default=100)
 parser.add_argument('-ae', '--annealing_epochs', type=int, default=1500)
-parser.add_argument('-lr', '--learning-rate', type=float, default=1e-3)
-parser.add_argument('-lrd', '--learning-rate-decay', type=float, default=1.)
+parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
+parser.add_argument('-lrd', '--learning_rate_decay', type=float, default=1.)
 parser.add_argument('-b1', '--beta1', type=float, default=0.95)
 parser.add_argument('-b2', '--beta2', type=float, default=0.999)
 parser.add_argument('-eh', '--emitter_hidden_dim', type=int, default=100)
@@ -20,7 +20,7 @@ parser.add_argument('-ne', '--num_epochs', type=int, default=1500)
 parser.add_argument('-bs', '--mini_batch_size', type=int, default=20)
 parser.add_argument('-af', '--minimum_annealing_factor', type=float, default=0.)
 parser.add_argument('-pw', '--power', type=int, default=1)
-parser.add_argument('-uc', '--use-cuda', type=int, default=0)
+parser.add_argument('-uc', '--use_cuda', type=int, default=0)
 parser.add_argument('-el', '--elbo', type=str, default='gaussian')
 args = parser.parse_args()
 
@@ -77,7 +77,7 @@ dmm = DMM(
     x_prob_dim=None, 
     x_dim=1,
     a_dim = 1,
-    b_dim=1,
+    b_dim=2,
     z_dim=1,
     num_particles=1, 
     annealing_epochs=annealing_epochs,
@@ -112,12 +112,17 @@ states_np = np.linspace(0, 1, 5).reshape(-1,1)
 true_means = np.maximum(0,states_np-np.exp(-states_np*5)*0.5-0.1, dtype=np.float32)
 true_std = (np.maximum(0, states_np, dtype=np.float32)-np.maximum(0, true_means, dtype=np.float32))*0.5 + 0.02
 obs = torch.tensor([0.5]*len(states)).reshape(-1,1)
+
+std = torch.zeros((5,1)) + 1e-5
+if use_cuda:
+    std = std.cuda()
+b_t = torch.cat([states, std], -1)
 if use_cuda:
     obs = obs.cuda()
 with torch.no_grad():
-    print(f"Next state means for action {a_t_1}", true_means, dmm.dmm.trans(states, a_t_1)[0])
-    print(f"Next state std for action {a_t_1}", true_std, dmm.dmm.trans(states, a_t_1)[1])
-    print(f"Next state inferred for obs 0.5", states, dmm.dmm.inference(states, obs))
+    print(f"Next state means for action {a_t_1}", true_means, dmm.dmm.trans(b_t, a_t_1)[0])
+    print(f"Next state std for action {a_t_1}", true_std, dmm.dmm.trans(b_t, a_t_1)[1])
+    print(f"Next state inferred for obs 0.5", states, dmm.dmm.inference(b_t, obs))
 
 predictive = pyro.infer.Predictive(dmm.dmm.generative_model, guide=dmm.dmm.inference_model, num_samples=500)
 svi_samples = predictive(x_batch=obs_seq[:1], a_batch=action_seq[:1], annealing_factor=1.0,)
