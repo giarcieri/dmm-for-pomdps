@@ -28,7 +28,7 @@ class EmissionNet(nn.Module):
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
 
-    def forward(self, z_t, a_t_1=None):
+    def forward(self, z_t, a_t_1=None): #TODO: maybe passing b_t instead of z_t?
         """
         Given the latent z at a particular time step t 
         (and the previous action if affects the observation generation),
@@ -52,10 +52,12 @@ class TransitionNet(nn.Module):
         super().__init__()
         # input dimension
         input_dim = b_dim + a_dim 
+        # output dimension
+        out_dim = int(b_dim/2)
         # initialize the three linear transformations used in the neural network
         self.lin_input_to_hidden = nn.Linear(input_dim, transition_hidden_dim)
-        self.lin_hidden_to_b_next_mean = nn.Linear(transition_hidden_dim, b_dim)
-        self.lin_hidden_to_b_next_scale = nn.Linear(transition_hidden_dim, b_dim)
+        self.lin_hidden_to_b_next_mean = nn.Linear(transition_hidden_dim, out_dim)
+        self.lin_hidden_to_b_next_scale = nn.Linear(transition_hidden_dim, out_dim)
         # initialize the two non-linearities used in the neural network
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
@@ -85,10 +87,12 @@ class InferenceNet(nn.Module):
         super().__init__()
         # input of the inference network, namely the proagated belief and the observation
         input_q_dim = b_dim + x_dim
+        # output dimension
+        out_dim = int(b_dim/2)
         # initialize the three linear transformations used in the neural network
         self.lin_input_to_hidden = nn.Linear(input_q_dim, hidden_dim)
-        self.lin_hidden_to_b_next_mean = nn.Linear(hidden_dim, b_dim)
-        self.lin_hidden_to_b_next_scale = nn.Linear(hidden_dim, b_dim)
+        self.lin_hidden_to_b_next_mean = nn.Linear(hidden_dim, out_dim)
+        self.lin_hidden_to_b_next_scale = nn.Linear(hidden_dim, out_dim)
         # initialize the two non-linearities used in the neural network
         self.relu = nn.ReLU()
         self.softplus = nn.Softplus()
@@ -121,7 +125,7 @@ class DMM_continuous(nn.Module):
         self,
         z_dim=1,
         x_dim=1,
-        b_dim=1,
+        b_dim=2,
         a_dim=1,
         use_action_emitter=False,
         emitter_hidden_dim=100,
@@ -147,8 +151,9 @@ class DMM_continuous(nn.Module):
         self.iafs_modules = nn.ModuleList(self.iafs)
 
         # The initial belief is always 1
-        self.b_tilde_0 = torch.ones(z_dim) # mean
-        #self.b_tilde_0_std = torch.zeros(z_dim).squeeze() + 1e-5
+        self.b_tilde_0_mean = torch.ones(z_dim) 
+        self.b_tilde_0_std = torch.zeros(z_dim) + 1e-5
+        self.b_tilde_0 = torch.cat([self.b_tilde_0_mean, self.b_tilde_0_std], -1) 
 
         self.use_cuda = use_cuda
         self.use_action_emitter = use_action_emitter
@@ -189,7 +194,7 @@ class DMM_continuous(nn.Module):
                 # the next chunk of code samples \tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})
 
                 if t == 0:
-                    z_loc, z_scale = b_tilde_0, 1e-5
+                    z_loc, z_scale = b_tilde_0[:, 0, None], b_tilde_0[:, 1, None]
                 else:
                     z_loc, z_scale = self.trans(b_tilde_prev, a_batch[:, t-1]) 
 
@@ -220,7 +225,7 @@ class DMM_continuous(nn.Module):
 
                 # the latent sampled at this time step will be conditioned upon
                 # in the next time step by carring the belief variable
-                b_tilde_prev = z_loc #TODO: maybe better to carry z_loc and z_scale
+                b_tilde_prev = torch.cat([z_loc, z_scale], -1) #TODO: try inverse_softplus z_scale
 
     # the guide q(z_{0:T} | x_{0:T},  a_{0:T-1}) (i.e. the variational distribution)
     def inference_model(
@@ -257,15 +262,16 @@ class DMM_continuous(nn.Module):
                     # we have acquired an observation, so we first propgate the belief and
                     # then use the observation to reduce the uncertainty and infer b_t, namely
                     # the distribution q(z_t | b_{t-1}, x_{t}, a_{t-1})
-                    z_loc_tilde_t, _ = self.trans(b_prev, a_batch[:, t-1]) #TODO: if sharing parameters doesn't work,
-                    z_loc, z_scale = self.inference(z_loc_tilde_t, x_batch[:, t]) # maybe using one inference nn only like in the original DMM?
+                    #TODO: if sharing parameters doesn't work, maybe using one inference nn only like in the original DMM?
+                    z_loc_tilde_t, z_scale_tilde_t = self.trans(b_prev, a_batch[:, t-1]) 
+                    b_tilde_t = torch.cat([z_loc_tilde_t, z_scale_tilde_t], -1) #TODO: try inverse_softplus z_scale
+                    z_loc, z_scale = self.inference(b_tilde_t, x_batch[:, t]) 
                 else:
                     # We did not acquire a new observation  
                     # so our new belief is just the propagated b_tilde
                     z_loc, z_scale = self.trans(b_prev, a_batch[:, t-1])
                 # track variables
                 #b_t = pyro.deterministic("b_%d" % t, b_t)
-
 
                 # if we are using normalizing flows, we apply the sequence of transformations
                 # parameterized by self.iafs to the base distribution defined in the previous line
@@ -281,7 +287,7 @@ class DMM_continuous(nn.Module):
                     assert z_dist.event_shape == ()
                     assert z_dist.batch_shape[-2:] == (
                         len(x_batch),
-                        self.b_tilde_0.size(0),
+                        int(self.b_tilde_0.size(0)/2),
                     )
 
                 # sample z_t from the distribution z_dist
@@ -300,4 +306,4 @@ class DMM_continuous(nn.Module):
 
                 # the latent sampled at this time step will be conditioned upon in the next time step
                 # by carring the belief variable
-                b_prev = z_loc #TODO: # maybe better to carry z_loc and z_scale
+                b_prev = torch.cat([z_loc, z_scale], -1) #TODO: try inverse_softplus z_scale
