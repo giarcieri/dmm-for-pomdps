@@ -91,6 +91,34 @@ class TransitionNet(nn.Module):
         # which approximates the probability distribution over the next state
         return self.softmax(logits)
     
+class TransitionNet_new(nn.Module):
+    """
+    Parameterizes the transition probability vector `\tilde{b}_t = p(z_t | b_{t-1}, a_{t-1})` 
+    with a softmax activation
+    """
+
+    def __init__(self, b_dim, a_dim, transition_hidden_dim):
+        super().__init__()
+        # input dimension
+        input_dim = b_dim + a_dim 
+        # initialize the linear transformations used in the neural network
+        self.lin_input_to_hidden = nn.Linear(input_dim, transition_hidden_dim)
+        self.lin_hidden_to_b_next = nn.Linear(transition_hidden_dim, b_dim)
+        # initialize the two non-linearities used in the neural network
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, b_t_1, a_t_1): 
+        """
+        Given the probability `b_{t-1}` over the latent `z_{t-1}` and the action `a_{t-1}`
+        we return the probability vector `\tilde{b}_{t-1}` that parameterizes the
+        Categorical distribution `\tilde{b}_t = p(z_t | \tilde{b}_{t-1}, a_{t-1})`
+        """
+        input = torch.cat([b_t_1, a_t_1], -1) 
+        _b_t = self.relu(self.lin_input_to_hidden(input))
+        b_t = self.softmax(self.lin_hidden_to_b_next(_b_t))
+        return b_t
+    
 class InferenceNet(nn.Module):
     """
     Parameterizes `b_t = q(z_t | b_{t-1}, a_{t-1}, x_{t})`, which is the basic building block
@@ -103,7 +131,7 @@ class InferenceNet(nn.Module):
         super().__init__()
         # input of the inference network, namely the proagated belief and the observation
         input_q_dim = b_dim + x_dim
-        # initialize the three linear transformations used in the neural network
+        # initialize the linear transformations used in the neural network
         self.lin_input_to_hidden = nn.Linear(input_q_dim, hidden_dim)
         self.lin_hidden_to_b_next = nn.Linear(hidden_dim, b_dim)
         # initialize the two non-linearities used in the neural network
