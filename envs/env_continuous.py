@@ -12,8 +12,10 @@ class ContinuousEnv(gym.Env):
             return_states=False,
             power=1,
             min_std_next_state=0.02,
+            seed=42,
     ):
         self.return_states = return_states
+        self.random_generator = np.random.default_rng(seed)
 
         self.state_space = Box(low=np.NINF, high=np.PINF, shape=(1,), dtype=np.float32)
         if return_states:
@@ -53,16 +55,16 @@ class ContinuousEnv(gym.Env):
     def transition_deterioration(self, state):
         next_state_mean = self.transition_deterioration_mean(state)
         next_state_std = (np.maximum(0, state, dtype=np.float32)-np.maximum(0, next_state_mean, dtype=np.float32))*0.5 + self.min_std_next_state
-        return next_state_mean + next_state_std*np.random.default_rng().standard_normal(size=len(state), dtype=np.float32)
+        return next_state_mean + next_state_std*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
     
     def transition_replacement(self, state):
         next_state_mean = 0.96*np.ones(len(state), dtype=np.float32)
         next_state_std = self.min_std_next_state
-        return next_state_mean + next_state_std*np.random.default_rng().standard_normal(size=len(state), dtype=np.float32)
+        return next_state_mean + next_state_std*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
     
     def observation_generating_process(self, state):
         std_obs = np.exp(state)*0.05
-        return state + std_obs*np.random.default_rng().standard_normal(size=len(state), dtype=np.float32)
+        return state + std_obs*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
     
     def reward_function(self, state, action):
         failure_prob = (1-np.clip(a=state, a_min=0., a_max=1., dtype=np.float32))
