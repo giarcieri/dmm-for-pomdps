@@ -102,7 +102,7 @@ class DMM():
         if load_model:
             self.load_checkpoint(path_load_model, path_load_opt)
         epoch_nll_list = []
-        for epoch in tqdm(range(num_epochs)):
+        for epoch in range(num_epochs):
             # accumulator for our estimate of the negative log likelihood for this epoch
             epoch_nll = 0.0
             # prepare mini-batch subsampling indices for this epoch
