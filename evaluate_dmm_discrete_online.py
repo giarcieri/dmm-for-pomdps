@@ -1,3 +1,4 @@
+import sys
 import argparse
 import multiprocessing
 import pickle
@@ -63,13 +64,15 @@ def collect_one_episode(seed, dmm, simple_env, length, epsilon_prob, use_cuda):
     belief_predicted_list = []
     action_list = []
     obs = env.reset()
-    prior_belief = torch.eye(1, env.n_states).squeeze()
+    prior_belief = torch.eye(1, env.n_states).reshape(1,-1)
     if use_cuda:
-        obs = obs.cuda()
         prior_belief = prior_belief.cuda()
     for _ in range(length):
+        obs_input = to_categorical(obs, env.n_obs).reshape(1,-1)
+        if use_cuda:
+            obs_input = obs_input.cuda()
         with torch.no_grad():
-            pred_belief = dmm.dmm.inference(prior_belief.reshape(1,-1), to_categorical(obs, env.n_obs).reshape(1,-1))
+            pred_belief = dmm.dmm.inference(prior_belief, obs_input)
         obs_list.append([obs])
         state_list.append([env.state])
         belief_true_list.append(env.belief)
@@ -80,16 +83,20 @@ def collect_one_episode(seed, dmm, simple_env, length, epsilon_prob, use_cuda):
         prior_belief = pred_belief
     return obs_list, state_list, belief_true_list, belief_predicted_list, action_list
 
-def evaluate_dmm(states, belief_true, belief_pred):
+def evaluate_dmm(states, belief_true, belief_pred, use_cuda):
     states = states.reshape(-1)
     belief_true = belief_true.reshape(-1, belief_true.size(-1))
     belief_pred = belief_pred.reshape(-1, belief_pred.size(-1))
+
     loss = nn.CrossEntropyLoss()
     loss_b_pred_states = loss(belief_pred, states)
     loss_b_true_states = loss(belief_true, states)
     loss_b_pred_b_true = loss(belief_pred, belief_true)
 
-    mca = MulticlassAccuracy(num_classes=belief_true.shape[-1], average=None)
+    if use_cuda:
+        mca = MulticlassAccuracy(num_classes=belief_true.shape[-1], average=None).to("cuda")
+    else:
+        mca = MulticlassAccuracy(num_classes=belief_true.shape[-1], average=None)
     belief_pred_rounded = belief_pred.argmax(-1)
     belief_true_rounded = belief_true.argmax(-1)
     mca_b_pred_states = mca(belief_pred_rounded, states)
@@ -121,6 +128,7 @@ def main():
     parser.add_argument('-ug', '--use_gate', type=int, default=1)
     parser.add_argument('-tb', '--train_last_batch', type=int, default=0)
     parser.add_argument('-se', '--save_evaluation_results', type=int, default=0)
+    parser.add_argument('-wo', '--workers', type=int, default=8)
     args = parser.parse_args() 
 
     use_cuda = bool(args.use_cuda)
@@ -157,7 +165,7 @@ def main():
 
     start_seed = 0
     
-    n_workers = multiprocessing.cpu_count()
+    n_workers = args.workers
     print(f"Using {n_workers} workers")
 
     for evaluation in tqdm(range(int(args.number_evaluations))):
@@ -177,10 +185,12 @@ def main():
             ))
         action_seq = to_categorical(torch.as_tensor(action_list), env.n_actions).squeeze()
         obs_seq = to_categorical(torch.as_tensor(obs_list), env.n_obs).squeeze()
-        state_list, belief_true_list = torch.as_tensor(state_list), torch.as_tensor(belief_true_list)
+        state_list, belief_true_list = torch.as_tensor(np.asarray(state_list)), torch.as_tensor(np.asarray(belief_true_list))
         belief_predicted_list = torch.stack([torch.stack(belief_predicted_sublist).squeeze() for belief_predicted_sublist in belief_predicted_list])
+        if use_cuda:
+            state_list, belief_true_list, obs_seq, action_seq = state_list.cuda(), belief_true_list.cuda(), obs_seq.cuda(), action_seq.cuda()
         buffer.store(obs_seq, action_seq)
-        evaluation_results = evaluate_dmm(state_list, belief_true_list, belief_predicted_list)
+        evaluation_results = evaluate_dmm(state_list, belief_true_list, belief_predicted_list, use_cuda)
         for key, value in evaluation_results.items():
             print(f"\n{key}: {value}")
         if bool(args.save_evaluation_results):
@@ -195,6 +205,8 @@ def main():
             )
         else:
             obs_buf, act_buf = buffer.get_buffers()
+            if use_cuda:
+                obs_buf, act_buf = obs_buf.cuda(), act_buf.cuda()
             epoch_nll_list = dmm.train(
                 x_seq=obs_buf, 
                 a_seq=act_buf, 
@@ -203,6 +215,12 @@ def main():
             )
 
 if __name__ == "__main__":
+    try:
+        use_cuda = bool(sys.argv[16])
+    except:
+        use_cuda = False
+    if use_cuda:
+        torch.multiprocessing.set_start_method('spawn')
     main()
 
 

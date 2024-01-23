@@ -31,4 +31,5 @@ python evaluate_dmm_discrete_online.py \
 --simple_env 0 \
 --use_gate 1 \
 --train_last_batch 0 \
---save_evaluation_results 0
+--save_evaluation_results 0 \
+--workers 20
