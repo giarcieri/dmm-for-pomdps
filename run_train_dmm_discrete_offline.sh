@@ -27,4 +27,5 @@ python train_dmm_discrete_offline.py \
 --mini_batch_size 50 \
 --minimum_annealing_factor 0.0  \
 --use_cuda 1 \
---simple_env 0
+--simple_env 0 \
+--use_gate 1

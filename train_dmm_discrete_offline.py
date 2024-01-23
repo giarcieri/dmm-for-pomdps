@@ -24,6 +24,7 @@ parser.add_argument('-bs', '--mini_batch_size', type=int, default=20)
 parser.add_argument('-af', '--minimum_annealing_factor', type=float, default=0.)
 parser.add_argument('-uc', '--use_cuda', type=int, default=0)
 parser.add_argument('-env', '--simple_env', type=int, default=0)
+parser.add_argument('-ug', '--use_gate', type=int, default=1)
 args = parser.parse_args()
 
 print(args)
@@ -55,6 +56,7 @@ mini_batch_size = int(args.mini_batch_size)
 minimum_annealing_factor = float(args.minimum_annealing_factor)
 use_cuda = bool(args.use_cuda)
 simple_env = bool(args.simple_env)
+use_gate = bool(args.use_gate)
 
 obs_seq = []
 state_seq = []
@@ -105,7 +107,8 @@ dmm = DMM(
     transition_hidden_dim=transition_hidden_dim,
     inference_hidden_dim=inference_hidden_dim,
     minimum_annealing_factor=minimum_annealing_factor,
-    use_cuda = use_cuda
+    use_cuda=use_cuda,
+    use_gate=use_gate
 )
 epoch_nll_list = dmm.train(x_seq=obs_seq, a_seq=action_seq, num_epochs=num_epochs, mini_batch_size=mini_batch_size,)
 train_time = time.time()-start_time
