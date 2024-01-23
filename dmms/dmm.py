@@ -40,12 +40,13 @@ class DMM():
         annealing_epochs=0,
         minimum_annealing_factor=0.2,
         keep_logs=False,
-        elbo='trace'
+        elbo='trace',
+        use_gate=True,
     ):
         # initialize the dmm with dicrete or with continuous variables
         if mode == 'discrete':
             self.dmm = DMM_discrete(z_dim, x_dim, x_prob_dim, b_dim, a_dim, use_action_emitter, emitter_hidden_dim, 
-                                    transition_hidden_dim, inference_hidden_dim, use_cuda)
+                                    transition_hidden_dim, inference_hidden_dim, use_cuda, use_gate)
         elif mode == 'continuous':
             self.dmm = DMM_continuous(z_dim, x_dim, b_dim, a_dim, use_action_emitter, emitter_hidden_dim, 
                                       transition_hidden_dim, inference_hidden_dim, num_iafs, iaf_dim, use_cuda)

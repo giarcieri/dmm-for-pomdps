@@ -47,7 +47,7 @@ class EmissionNet(nn.Module):
         ps = self.softmax(self.lin_hidden_to_emission(h2))
         return ps
     
-class TransitionNet(nn.Module):
+class TransitionNet_gate(nn.Module):
     """
     Parameterizes the transition probability vector `\tilde{b}_t = p(z_t | b_{t-1}, a_{t-1})` 
     with a softmax activation
@@ -91,7 +91,7 @@ class TransitionNet(nn.Module):
         # which approximates the probability distribution over the next state
         return self.softmax(logits)
     
-class TransitionNet_new(nn.Module):
+class TransitionNet_no_gate(nn.Module):
     """
     Parameterizes the transition probability vector `\tilde{b}_t = p(z_t | b_{t-1}, a_{t-1})` 
     with a softmax activation
@@ -173,6 +173,7 @@ class DMM_discrete(nn.Module):
         transition_hidden_dim=100,
         inference_hidden_dim=100,
         use_cuda=False,
+        use_gate=True,
     ):
         super().__init__()
         # instantiate PyTorch modules used in the model and guide below
@@ -180,7 +181,10 @@ class DMM_discrete(nn.Module):
             self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_prob_dim, a_dim)
         else:
             self.emitter = EmissionNet(z_dim, emitter_hidden_dim, x_prob_dim)
-        self.trans = TransitionNet(b_dim, a_dim, transition_hidden_dim)
+        if use_gate:
+            self.trans = TransitionNet_gate(b_dim, a_dim, transition_hidden_dim)
+        else:
+            self.trans = TransitionNet_no_gate(b_dim, a_dim, transition_hidden_dim)
         self.inference = InferenceNet(b_dim, x_dim, inference_hidden_dim)
 
         # The initial belief is always [1., 0., 0., ...]
