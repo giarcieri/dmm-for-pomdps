@@ -3,6 +3,7 @@ import argparse
 import multiprocessing
 import pickle
 import time
+import matplotlib.pyplot as plt
 
 from multiprocessing import Pool
 from functools import partial
@@ -161,12 +162,12 @@ def main():
         use_gate=bool(args.use_gate)
     )
 
-    mca = MulticlassAccuracy(num_classes=env.n_states, average=None)
-
     start_seed = 0
     
     n_workers = args.workers
     print(f"Using {n_workers} workers")
+
+    epoch_nll_list_all = []
 
     for evaluation in tqdm(range(int(args.number_evaluations))):
         collect_one_episode_partial = partial(
@@ -196,23 +197,36 @@ def main():
         if bool(args.save_evaluation_results):
             with open(f'results/evaluation_results_{time.strftime("%d-%m-%Y")}.pkl', 'wb') as f:
                 pickle.dump(evaluation_results, f)
-        if bool(args.train_last_batch):
-            epoch_nll_list = dmm.train(
-                x_seq=obs_seq, 
-                a_seq=action_seq, 
-                num_epochs=int(args.num_epochs), 
-                mini_batch_size=int(args.mini_batch_size),
-            )
-        else:
-            obs_buf, act_buf = buffer.get_buffers()
-            if use_cuda:
-                obs_buf, act_buf = obs_buf.cuda(), act_buf.cuda()
-            epoch_nll_list = dmm.train(
-                x_seq=obs_buf, 
-                a_seq=act_buf, 
-                num_epochs=int(args.num_epochs), 
-                mini_batch_size=int(args.mini_batch_size),
-            )
+        states_dummy = torch.arange(env.n_states).reshape(env.n_states, 1)
+        states_dummy = to_categorical(states_dummy, env.n_states)
+        if use_cuda:
+            states_dummy = states_dummy.cuda()
+        with torch.no_grad():
+            print(f'Ground truth observation matrix:', torch.round(dmm.dmm.emitter(states_dummy), decimals=2))
+        if evaluation < int(args.number_evaluations) - 1:
+            if bool(args.train_last_batch):
+                epoch_nll_list = dmm.train(
+                    x_seq=obs_seq, 
+                    a_seq=action_seq, 
+                    num_epochs=int(args.num_epochs), 
+                    mini_batch_size=int(args.mini_batch_size),
+                )
+            else:
+                obs_buf, act_buf = buffer.get_buffers()
+                if use_cuda:
+                    obs_buf, act_buf = obs_buf.cuda(), act_buf.cuda()
+                epoch_nll_list = dmm.train(
+                    x_seq=obs_buf, 
+                    a_seq=act_buf, 
+                    num_epochs=int(args.num_epochs), 
+                    mini_batch_size=int(args.mini_batch_size),
+                )
+            epoch_nll_list_all.append(epoch_nll_list)
+            print('Best NLL:', np.min(epoch_nll_list))
+            plt.plot(np.array(epoch_nll_list_all).flatten())
+            plt.savefig('images/nll_discrete_online');
+        if use_cuda:
+            torch.cuda.empty_cache()
 
 if __name__ == "__main__":
     try:
