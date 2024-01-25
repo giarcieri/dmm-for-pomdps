@@ -9,6 +9,7 @@ from multiprocessing import Pool
 from functools import partial
 from tqdm import tqdm
 from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.classification import MulticlassConfusionMatrix
 from torch.nn import CrossEntropyLoss
 
 from envs.env_discrete import DiscreteEnv, SimpleDiscreteEnv
@@ -103,9 +104,18 @@ def evaluate_dmm(states, belief_true, belief_pred, use_cuda):
     mca_b_pred_states = mca(belief_pred_rounded, states)
     mca_b_true_states = mca(belief_true_rounded, states)
     mca_b_pred_b_true = mca(belief_pred_rounded, belief_true_rounded)
+
+    if use_cuda:
+        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1]).to("cuda")
+    else:
+        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1])
+    cm_b_pred_states = cm(belief_pred_rounded, states)
+    cm_b_true_states = cm(belief_true_rounded, states)
+    cm_b_pred_b_true = cm(belief_pred_rounded, belief_true_rounded)
     return {"loss_b_pred_states": loss_b_pred_states, "loss_b_true_states": loss_b_true_states, \
             "loss_b_pred_b_true": loss_b_pred_b_true, "mca_b_pred_states": mca_b_pred_states, \
-            "mca_b_true_states": mca_b_true_states, "mca_b_pred_b_true": mca_b_pred_b_true}
+            "mca_b_true_states": mca_b_true_states, "mca_b_pred_b_true": mca_b_pred_b_true, \
+            "cm_b_pred_states": cm_b_pred_states, "cm_b_true_states": cm_b_true_states, "cm_b_pred_b_true": cm_b_pred_b_true}
 
 def main():
     parser = argparse.ArgumentParser()
