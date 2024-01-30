@@ -1,6 +1,5 @@
 import sys
 import argparse
-import multiprocessing
 import pickle
 import time
 import matplotlib.pyplot as plt
@@ -17,7 +16,7 @@ from dmms.dmm import *
 
 class ReplayBuffer:
     """
-    A simple FIFO experience replay buffer for SAC agents.
+    A simple FIFO experience replay buffer.
     """
 
     def __init__(self, timesteps, obs_dim, act_dim, size):
@@ -90,7 +89,7 @@ def evaluate_dmm(states, belief_true, belief_pred, use_cuda):
     belief_true = belief_true.reshape(-1, belief_true.size(-1))
     belief_pred = belief_pred.reshape(-1, belief_pred.size(-1))
 
-    loss = nn.CrossEntropyLoss()
+    loss = CrossEntropyLoss()
     loss_b_pred_states = loss(belief_pred, states)
     loss_b_true_states = loss(belief_true, states)
     loss_b_pred_b_true = loss(belief_pred, belief_true)
@@ -142,6 +141,8 @@ def main():
     parser.add_argument('-wo', '--workers', type=int, default=8)
     args = parser.parse_args() 
 
+    print(args)
+
     use_cuda = bool(args.use_cuda)
     simple_env = bool(args.simple_env)
 
@@ -180,6 +181,9 @@ def main():
     epoch_nll_list_all = []
 
     for evaluation in tqdm(range(int(args.number_evaluations))):
+        dmm.dmm.eval()
+
+        # Collect new trials
         collect_one_episode_partial = partial(
             collect_one_episode, 
             dmm=dmm,
@@ -194,6 +198,8 @@ def main():
             obs_list, state_list, belief_true_list, belief_predicted_list, action_list = zip(*pool.map( # consider imap and/or unordered
                 collect_one_episode_partial, seeds
             ))
+        pool.close()
+        pool.join()
         action_seq = to_categorical(torch.as_tensor(action_list), env.n_actions).squeeze()
         obs_seq = to_categorical(torch.as_tensor(obs_list), env.n_obs).squeeze()
         state_list, belief_true_list = torch.as_tensor(np.asarray(state_list)), torch.as_tensor(np.asarray(belief_true_list))
@@ -201,6 +207,8 @@ def main():
         if use_cuda:
             state_list, belief_true_list, obs_seq, action_seq = state_list.cuda(), belief_true_list.cuda(), obs_seq.cuda(), action_seq.cuda()
         buffer.store(obs_seq, action_seq)
+
+        # Evaluate dmm
         evaluation_results = evaluate_dmm(state_list, belief_true_list, belief_predicted_list, use_cuda)
         for key, value in evaluation_results.items():
             print(f"\n{key}: {value}")
@@ -213,7 +221,16 @@ def main():
             states_dummy = states_dummy.cuda()
         with torch.no_grad():
             print(f'Ground truth observation matrix:', torch.round(dmm.dmm.emitter(states_dummy), decimals=2))
+        actions_dummy = torch.zeros((env.n_states,), dtype=torch.int).reshape(-1, 1)
+        actions_dummy = to_categorical(actions_dummy, env.n_actions)
+        if use_cuda:
+            actions_dummy = actions_dummy.cuda()
+        with torch.no_grad():
+            print('Learned propagated beliefs for action 0:', torch.round(dmm.dmm.trans(states_dummy, actions_dummy), decimals=2))
+
+        # Training
         if evaluation < int(args.number_evaluations) - 1:
+            dmm.dmm.train()
             if bool(args.train_last_batch):
                 epoch_nll_list = dmm.train(
                     x_seq=obs_seq, 
@@ -234,6 +251,7 @@ def main():
             epoch_nll_list_all.append(epoch_nll_list)
             print('Best NLL:', np.min(epoch_nll_list))
             plt.plot(np.array(epoch_nll_list_all).flatten())
+            plt.ylim(-15, 60)
             plt.savefig('images/nll_discrete_online');
         if use_cuda:
             torch.cuda.empty_cache()
@@ -241,6 +259,7 @@ def main():
 if __name__ == "__main__":
     try:
         use_cuda = bool(sys.argv[16])
+        print("Use cuda", use_cuda)
     except:
         use_cuda = False
     if use_cuda:
