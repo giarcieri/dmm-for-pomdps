@@ -68,12 +68,19 @@ def collect_one_episode(seed, dmm, simple_env, length, epsilon_prob, use_cuda):
     prior_belief = torch.eye(1, env.n_states).reshape(1,-1)
     if use_cuda:
         prior_belief = prior_belief.cuda()
-    for _ in range(length):
+    for t in range(length):
         obs_input = to_categorical(obs, env.n_obs).reshape(1,-1)
         if use_cuda:
             obs_input = obs_input.cuda()
-        with torch.no_grad():
-            pred_belief = dmm.dmm.inference(prior_belief, obs_input)
+        if t == 0:
+            with torch.no_grad():
+                pred_belief = dmm.dmm.inference(prior_belief, obs_input)
+        else:
+            if use_cuda:
+                action = action.cuda()
+            with torch.no_grad():
+                pred_belief_tilde = dmm.dmm.trans(prior_belief, action)
+                pred_belief = dmm.dmm.inference(pred_belief_tilde, obs_input)
         obs_list.append([obs])
         state_list.append([env.state])
         belief_true_list.append(env.belief)
@@ -81,6 +88,7 @@ def collect_one_episode(seed, dmm, simple_env, length, epsilon_prob, use_cuda):
         action = epsilon_random_action(env, epsilon_prob)
         action_list.append([action])
         obs, reward, done, info = env.step(action)
+        action = to_categorical(torch.tensor(action), env.n_actions).reshape(1, -1)
         prior_belief = pred_belief
     return obs_list, state_list, belief_true_list, belief_predicted_list, action_list
 

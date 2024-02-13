@@ -55,17 +55,28 @@ def collect_one_episode(seed, dmm, length, use_cuda):
     if use_cuda:
         prior_belief = prior_belief.cuda()
         obs = obs.cuda()
-    for _ in range(length):
+    for t in range(length):
         if use_cuda:
             obs = obs.cuda()
-        with torch.no_grad():
-            pred_belief = torch.cat(dmm.dmm.inference(prior_belief, obs), -1)
+        if t == 0:
+            with torch.no_grad():
+                z_loc, z_scale = dmm.dmm.inference(prior_belief, obs)
+                pred_belief = torch.cat([z_loc, z_scale], -1)
+        else:
+            if use_cuda:
+                action = action.cuda()
+            with torch.no_grad():
+                z_loc_tilde, z_scale_tilde = dmm.dmm.trans(prior_belief, action) 
+                pred_belief_tilde = torch.cat([z_loc_tilde, z_scale_tilde], -1)
+                z_loc, z_scale = dmm.dmm.inference(pred_belief_tilde, obs) 
+                pred_belief = torch.cat([z_loc, z_scale], -1)
         obs_list.append(obs)
         state_list.append(env.state)
         belief_pred_list.append(pred_belief.squeeze())
         action = policy(env)
         action_list.append(action)
         obs, reward, done, info = env.step(action)
+        action = torch.tensor(action).reshape(1, -1)
         obs = torch.tensor(obs).reshape(1, -1)
         prior_belief = pred_belief
     return obs_list, state_list, belief_pred_list, action_list
@@ -181,6 +192,18 @@ def main():
         with torch.no_grad():
             print(f"Emission means for", states_dummy, dmm.dmm.emitter(states_dummy)[0])
             print(f"Emission std for", torch.exp(states_dummy)*0.05, dmm.dmm.emitter(states_dummy)[1])
+        obs_dummy = torch.tensor([0.5]*len(states_dummy)).reshape(-1,1)
+        std_dummy = torch.zeros((5,1)) + 1e-5
+        a_dummy = torch.zeros(len(states_dummy)).reshape(-1,1) + 0.1
+        if use_cuda:
+            std_dummy = std_dummy.cuda()
+            obs_dummy = obs_dummy.cuda()
+            a_dummy = a_dummy.cuda()
+        b_dummy = torch.cat([states_dummy, std_dummy], -1)
+        with torch.no_grad():
+            print(f"Next state means for action {a_dummy}", dmm.dmm.trans(b_dummy, a_dummy)[0])
+            print(f"Next state std for action {a_dummy}", dmm.dmm.trans(b_dummy, a_dummy)[1])
+            print(f"Next state inferred for obs 0.5", dmm.dmm.inference(b_dummy, obs_dummy))
 
         # Training
         if evaluation < int(args.number_evaluations) - 1:
@@ -205,7 +228,7 @@ def main():
             epoch_nll_list_all.append(epoch_nll_list)
             print('Best NLL:', np.min(epoch_nll_list))
             plt.plot(np.array(epoch_nll_list_all).flatten())
-            plt.ylim(-15, 15)
+            plt.ylim(-15, 60)
             plt.savefig('images/nll_continuous_online');
         if use_cuda:
             torch.cuda.empty_cache()
