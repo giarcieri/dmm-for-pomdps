@@ -235,7 +235,7 @@ class DMM_discrete(nn.Module):
                 else:
                     b_tilde_t = self.trans(b_tilde_prev, a_batch[:, t-1]) #TODO: if this doesn't work, maybe passing z_prev as input?
                 # track variables
-                #b_tilde_t = pyro.param("b_tilde_%d" % t, b_tilde_t)
+                #b_tilde_t_param = pyro.param("b_tilde_%d" % t, b_tilde_t.clone().detach())
 
 
                 # then sample z_t according to dist.Categorical(b_tilde_t)
@@ -296,12 +296,15 @@ class DMM_discrete(nn.Module):
                 if t == 0:
                     # No action at the first t, b_tilde_0 coincides with the belief b_0
                     b_t = self.inference(b_tilde_0, x_batch[:, t])
+                    #b_tilde_t_param = pyro.param("b_tilde_%d" % t, b_t.clone().detach())
                 elif x_batch[:, t] is not None: #TODO: this is wrong, it is always True, fix it for non-permanent monitoring
                     # we have acquired an observation, so we first propgate the belief and
                     # then use the observation to reduce the uncertainty and infer b_t, namely
                     # the distribution q(z_t | b_{t-1}, x_{t}, a_{t-1})
                     b_tilde_t = self.trans(b_prev, a_batch[:, t-1]) #TODO: if sharing parameters doesn't work,
                     b_t = self.inference(b_tilde_t, x_batch[:, t]) # maybe using one inference nn only like in the original DMM?
+                    # track variables
+                    #b_tilde_t_param = pyro.param("b_tilde_%d" % t, b_tilde_t.clone().detach())
                 else:
                     # We did not acquire a new observation  
                     # so our new belief is just the propagated b_tilde

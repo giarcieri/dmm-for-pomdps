@@ -226,6 +226,7 @@ class DMM_continuous(nn.Module):
                 # the latent sampled at this time step will be conditioned upon
                 # in the next time step by carring the belief variable
                 b_tilde_prev = torch.cat([z_loc, z_scale], -1) #TODO: try inverse_softplus z_scale
+                #b_tilde_t_param = pyro.param("b_tilde_%d" % t, b_tilde_prev.clone().detach())
 
     # the guide q(z_{0:T} | x_{0:T},  a_{0:T-1}) (i.e. the variational distribution)
     def inference_model(
@@ -258,6 +259,7 @@ class DMM_continuous(nn.Module):
                 # at every timestep, in which case the propagated belief `\tilde{b}_t` is returned.
                 if t == 0:
                     z_loc, z_scale = self.inference(b_tilde_0, x_batch[:, t])
+                    #b_tilde_t_param = pyro.param("b_tilde_%d" % t, torch.cat([z_loc, z_scale], -1).clone().detach())
                 elif x_batch[:, t] is not None: #TODO: this is wrong, it is always True, fix it for non-permanent monitoring
                     # we have acquired an observation, so we first propgate the belief and
                     # then use the observation to reduce the uncertainty and infer b_t, namely
@@ -265,6 +267,7 @@ class DMM_continuous(nn.Module):
                     #TODO: if sharing parameters doesn't work, maybe using one inference nn only like in the original DMM?
                     z_loc_tilde_t, z_scale_tilde_t = self.trans(b_prev, a_batch[:, t-1]) 
                     b_tilde_t = torch.cat([z_loc_tilde_t, z_scale_tilde_t], -1) #TODO: try inverse_softplus z_scale
+                    #b_tilde_t_param = pyro.param("b_tilde_%d" % t, b_tilde_t.clone().detach())
                     z_loc, z_scale = self.inference(b_tilde_t, x_batch[:, t]) 
                 else:
                     # We did not acquire a new observation  
