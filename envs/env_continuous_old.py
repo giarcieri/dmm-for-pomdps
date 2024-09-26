@@ -29,9 +29,7 @@ class ContinuousEnv(gym.Env):
 
     def reset(self):
         self.t = 0
-        self.state_mean = np.array([1.], dtype=np.float32)
-        self.state_std = np.array([0.], dtype=np.float32) + 1e-5 
-        self.state = self.state_mean + self.state_std*self.random_generator.standard_normal(size=len(self.state_mean), dtype=np.float32)
+        self.state = np.array([1.], dtype=np.float32)
         if self.return_states:
             return self.state
         else:
@@ -49,27 +47,20 @@ class ContinuousEnv(gym.Env):
             return self.obs, reward, False, {'state': self.state}
     
     def transition_model(self, state, action):
-        next_state_mean_det = self.transition_deterioration_mean(state)
-        next_state_std_det = self.transition_deterioration_std(state, next_state_mean_det)
-
-        next_state_mean_rep = 0.96*np.ones(len(state), dtype=np.float32)
-        next_state_std_rep = self.min_std_next_state
-
-        action_power = action**self.power
-
-        next_state_mean = next_state_mean_det*(1-action_power)+next_state_mean_rep*action_power
-        next_state_std = np.sqrt((next_state_std_det*(1-action_power))**2+(next_state_std_rep*action_power)**2)
-
-        self.state_mean = next_state_mean
-        self.state_std = next_state_std
-
-        return next_state_mean + next_state_std*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
+        return self.transition_deterioration(state)*(1-action**self.power) + self.transition_replacement(state)*action**self.power
     
     def transition_deterioration_mean(self, state):
         return np.maximum(0,state-np.exp(-state*5)*0.5-0.1, dtype=np.float32)
     
-    def transition_deterioration_std(self, state, next_state_mean):
-        return (np.maximum(0, state, dtype=np.float32)-np.maximum(0, next_state_mean, dtype=np.float32))*0.5 + self.min_std_next_state
+    def transition_deterioration(self, state):
+        next_state_mean = self.transition_deterioration_mean(state)
+        next_state_std = (np.maximum(0, state, dtype=np.float32)-np.maximum(0, next_state_mean, dtype=np.float32))*0.5 + self.min_std_next_state
+        return next_state_mean + next_state_std*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
+    
+    def transition_replacement(self, state):
+        next_state_mean = 0.96*np.ones(len(state), dtype=np.float32)
+        next_state_std = self.min_std_next_state
+        return next_state_mean + next_state_std*self.random_generator.standard_normal(size=len(state), dtype=np.float32)
     
     def observation_generating_process(self, state):
         std_obs = np.exp(state)*0.05

@@ -10,7 +10,7 @@ from torch.nn import MSELoss
 from tqdm import tqdm
 from pyro.infer import SVI
 
-from envs.env_continuous import ContinuousEnv
+from envs.env_continuous_old import ContinuousEnv
 from dmms.dmm import * 
 
 class ReplayBuffer:
@@ -46,7 +46,6 @@ def collect_one_episode(seed, dmm, length, use_cuda):
     env = ContinuousEnv(seed=seed, power=1)
     obs_list = []
     state_list = []
-    state_dist_list = []
     belief_pred_list = []
     action_list = []
     obs = torch.tensor(env.reset()).reshape(1, -1)
@@ -55,7 +54,6 @@ def collect_one_episode(seed, dmm, length, use_cuda):
     prior_belief = torch.cat([prior_belief_mean, prior_belief_std], -1).reshape(1, -1)
     if use_cuda:
         prior_belief = prior_belief.cuda()
-        obs = obs.cuda()
     for t in range(length):
         if use_cuda:
             obs = obs.cuda()
@@ -63,6 +61,8 @@ def collect_one_episode(seed, dmm, length, use_cuda):
             with torch.no_grad():
                 z_loc, z_scale = dmm.dmm.inference(prior_belief, obs)
                 pred_belief = torch.cat([z_loc, z_scale], -1)
+                ####
+                #print("online", "state", env.state, "obs", obs, "pred_belief", pred_belief)
         else:
             if use_cuda:
                 action = action.cuda()
@@ -71,44 +71,31 @@ def collect_one_episode(seed, dmm, length, use_cuda):
                 pred_belief_tilde = torch.cat([z_loc_tilde, z_scale_tilde], -1)
                 z_loc, z_scale = dmm.dmm.inference(pred_belief_tilde, obs) 
                 pred_belief = torch.cat([z_loc, z_scale], -1)
-        obs_list.append(obs)
+                ####
+                #print("online", "state", env.state, "obs", obs, "action", action, "pred_belief", pred_belief)
+        obs_list.append(obs.clone())
         state_list.append(env.state)
-        state_dist_list.append([env.state_mean.squeeze(), env.state_std.squeeze()])
-        belief_pred_list.append(pred_belief.squeeze())
+        belief_pred_list.append(pred_belief.clone().squeeze())
         action = policy(env)
         action_list.append(action)
         obs, reward, done, info = env.step(action)
         action = torch.tensor(action).reshape(1, -1)
         obs = torch.tensor(obs).reshape(1, -1)
-        prior_belief = pred_belief
-    return obs_list, state_list, state_dist_list, belief_pred_list, action_list
+        prior_belief = pred_belief.clone()
+    return obs_list, state_list, belief_pred_list, action_list
 
-def kl_gaussian(mean_p, std_p, mean_q, std_q):
-    """Calculate KL(p,q) between two gaussian distributions."""
-    kl = torch.log(std_q/std_p) + (std_p**2 + (mean_p - mean_q)**2)/(2*std_q**2) - 0.5
-    return torch.mean(kl)
-
-def evaluate_dmm(states, state_dist, belief_pred, obs):
+def evaluate_dmm(states, belief_pred, obs):
     states = states.reshape(-1,)
     obs = obs.reshape(-1,)
     belief_pred = belief_pred.reshape(-1, belief_pred.size(-1))
-    state_dist = state_dist.reshape(-1, state_dist.size(-1))
     belief_pred_mean = belief_pred[:, 0]
-    belief_pred_std = belief_pred[:, 1]
-    state_mean = state_dist[:, 0]
-    state_std = state_dist[:, 1]
-
     ####
-    #print(belief_pred_mean, state_mean, belief_pred_std, state_std, obs)
-    z = (states - belief_pred_mean)/belief_pred_std
-    print("standard", z.mean(), z.std())
+    #print(belief_pred, belief_pred_mean, states, obs)
 
     loss = MSELoss()
     loss_b_pred_states = loss(belief_pred_mean, states)
     loss_obs_states = loss(obs, states)
-
-    kl = kl_gaussian(state_mean, state_std, belief_pred_mean, belief_pred_std)
-    return {"loss_obs_states": loss_obs_states, "loss_b_pred_states": loss_b_pred_states, "kl_state_b_pred": kl}
+    return {"loss_obs_states": loss_obs_states, "loss_b_pred_states": loss_b_pred_states}
 
 
 def main():
@@ -181,26 +168,24 @@ def main():
         seeds = range(start_seed, start_seed+int(args.number_trials_per_evaluations))
         start_seed += int(args.number_trials_per_evaluations)
         with Pool(n_workers) as pool:
-            obs_list, state_list, state_dist_list, belief_pred_list, action_list = zip(*pool.map( # consider imap and/or unordered
+            obs_list, state_list, belief_pred_list, action_list = zip(*pool.map( # consider imap and/or unordered
                 collect_one_episode_partial, seeds
             ))
         pool.close()
         pool.join()
         obs_list = torch.tensor(obs_list).unsqueeze(-1)
         state_list = torch.tensor(state_list)
-        state_dist_list = torch.tensor(np.asarray(state_dist_list))
         belief_pred_list = torch.stack([torch.stack(belief_predicted_sublist).squeeze() for belief_predicted_sublist in belief_pred_list])
         action_list = torch.tensor(action_list)
         if use_cuda:
             obs_list = obs_list.cuda()
             state_list = state_list.cuda()
-            state_dist_list = state_dist_list.cuda()
             belief_pred_list = belief_pred_list.cuda()
             action_list = action_list.cuda()
         buffer.store(obs_list, action_list)
 
         # Evaluate dmm
-        evaluation_results = evaluate_dmm(state_list, state_dist_list, belief_pred_list, obs_list)
+        evaluation_results = evaluate_dmm(state_list, belief_pred_list, obs_list)
         for key, value in evaluation_results.items():
             print(f"\n{key}: {value}")
         if bool(args.save_evaluation_results):
@@ -254,6 +239,7 @@ def main():
             torch.cuda.empty_cache()
 
 if __name__ == "__main__":
+    print(sys.argv, len(sys.argv))
     try:
         use_cuda = bool(int(sys.argv[32]))
         print("Use cuda", use_cuda)
