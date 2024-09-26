@@ -54,6 +54,13 @@ def to_categorical(y, num_classes):
     """ 1-hot encodes a tensor """
     return torch.eye(num_classes)[y]
 
+def unravel_index(index, shape):
+    out = []
+    for dim in reversed(shape):
+        out.append(index % dim)
+        index = index // dim
+    return tuple(reversed(out))
+
 def collect_one_episode(seed, dmm, simple_env, length, epsilon_prob, use_cuda):
     if simple_env:
         env = SimpleDiscreteEnv(seed=seed, return_belief=False, reward_belief=False)
@@ -97,28 +104,52 @@ def evaluate_dmm(states, belief_true, belief_pred, use_cuda):
     belief_true = belief_true.reshape(-1, belief_true.size(-1))
     belief_pred = belief_pred.reshape(-1, belief_pred.size(-1))
 
+    if use_cuda:
+        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1]).to("cuda")
+    else:
+        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1])
+    belief_pred_rounded = belief_pred.argmax(-1)
+    cm_b_pred_states = cm(belief_pred_rounded, states)
+    print("before swapping", cm_b_pred_states)
+
+    dummy = cm_b_pred_states.clone()
+    belief_pred_swapped = belief_pred.clone()
+    l = []
+    for _ in range(3):
+        i, j = unravel_index(dummy.argmax(), dummy.shape)
+        dummy[:, j] = torch.zeros(5)
+        if i not in l:
+            idx = torch.LongTensor(range(5))
+            if use_cuda:
+                idx = idx.cuda()
+            b, c = idx[i].clone(), idx[j].clone()
+            idx[i] = c
+            idx[j] = b
+            cm_b_pred_states = cm_b_pred_states.index_select(1, idx)
+            dummy = dummy.index_select(1, idx)
+            print("swap", cm_b_pred_states)
+            belief_pred_swapped = belief_pred_swapped.index_select(1, idx)
+            l.append(i)
+    print("after swapping", cm_b_pred_states)
+
     loss = CrossEntropyLoss()
-    loss_b_pred_states = loss(belief_pred, states)
+    loss_b_pred_states = loss(belief_pred_swapped, states)
     loss_b_true_states = loss(belief_true, states)
-    loss_b_pred_b_true = loss(belief_pred, belief_true)
+    loss_b_pred_b_true = loss(belief_pred_swapped, belief_true)
 
     if use_cuda:
         mca = MulticlassAccuracy(num_classes=belief_true.shape[-1], average=None).to("cuda")
     else:
         mca = MulticlassAccuracy(num_classes=belief_true.shape[-1], average=None)
-    belief_pred_rounded = belief_pred.argmax(-1)
+    belief_pred_rounded_swapped = belief_pred_swapped.argmax(-1)
+    mca_b_pred_states = mca(belief_pred_rounded_swapped, states)
     belief_true_rounded = belief_true.argmax(-1)
-    mca_b_pred_states = mca(belief_pred_rounded, states)
     mca_b_true_states = mca(belief_true_rounded, states)
-    mca_b_pred_b_true = mca(belief_pred_rounded, belief_true_rounded)
+    mca_b_pred_b_true = mca(belief_pred_rounded_swapped, belief_true_rounded)
 
-    if use_cuda:
-        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1]).to("cuda")
-    else:
-        cm = MulticlassConfusionMatrix(num_classes=belief_true.shape[-1])
-    cm_b_pred_states = cm(belief_pred_rounded, states)
+    cm_b_pred_states = cm(belief_pred_rounded_swapped, states)
     cm_b_true_states = cm(belief_true_rounded, states)
-    cm_b_pred_b_true = cm(belief_pred_rounded, belief_true_rounded)
+    cm_b_pred_b_true = cm(belief_pred_rounded_swapped, belief_true_rounded)
     return {"loss_b_pred_states": loss_b_pred_states, "loss_b_true_states": loss_b_true_states, \
             "loss_b_pred_b_true": loss_b_pred_b_true, "mca_b_pred_states": mca_b_pred_states, \
             "mca_b_true_states": mca_b_true_states, "mca_b_pred_b_true": mca_b_pred_b_true, \
