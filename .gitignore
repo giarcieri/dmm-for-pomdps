@@ -1,6 +1,13 @@
 *.ipynb
 *.png
+output_*.txt
 __pycache__/
 .ipynb_checkpoints
 envs/__pycache__/
 dmms/__pycache__/
+fractal_env
+dmm_comp
+*no_sharing.*
+*_offline.*
+*old.py
+*.pkl

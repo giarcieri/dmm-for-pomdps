@@ -98,8 +98,6 @@ def evaluate_dmm(states, state_dist, belief_pred, obs):
     state_mean = state_dist[:, 0]
     state_std = state_dist[:, 1]
 
-    ####
-    #print(belief_pred_mean, state_mean, belief_pred_std, state_std, obs)
     z = (states - belief_pred_mean)/belief_pred_std
     print("standard", z.mean(), z.std())
 
@@ -166,6 +164,10 @@ def main():
     n_workers = args.workers
     print(f"Using {n_workers} workers")
 
+    all_belief_pred = torch.zeros((buffer_size, args.length, 2))
+    all_true_states = torch.zeros((buffer_size, args.length, 1))
+    ptr = 0
+
     epoch_nll_list_all = []
 
     for evaluation in tqdm(range(int(args.number_evaluations))):
@@ -198,6 +200,9 @@ def main():
             belief_pred_list = belief_pred_list.cuda()
             action_list = action_list.cuda()
         buffer.store(obs_list, action_list)
+        all_belief_pred[ptr:ptr+args.number_trials_per_evaluations] = belief_pred_list
+        all_true_states[ptr:ptr+args.number_trials_per_evaluations] = state_list
+        ptr += args.number_trials_per_evaluations
 
         # Evaluate dmm
         evaluation_results = evaluate_dmm(state_list, state_dist_list, belief_pred_list, obs_list)
@@ -252,6 +257,10 @@ def main():
             plt.savefig('images/nll_continuous_online');
         if use_cuda:
             torch.cuda.empty_cache()
+    #with open(f'all_belief_pred.pkl', 'wb') as f:
+    #    pickle.dump(all_belief_pred, f)
+    #with open(f'all_true_states.pkl', 'wb') as f:
+    #    pickle.dump(all_true_states, f)
 
 if __name__ == "__main__":
     try:
